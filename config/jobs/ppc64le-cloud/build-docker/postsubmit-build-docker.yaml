@@ -1,11 +1,11 @@
-postsubmit:
+postsubmits:
   ppc64le-cloud/docker-ce-build:
-    - name: periodic-build-docker
+    - name: postsubmit-build-docker
       cluster: k8s-ppc64le-cluster
       decorate: true
-      run_if_changed: 'env'
       branches:
         - main
+      run_if_changed: 'env/env.list'
       reporter_config:
         slack:
           channel: 'prow-job-notifications'
@@ -14,11 +14,6 @@ postsubmit:
            - failure
            - error
           report_template: 'Job {{.Spec.Job}} of type {{.Spec.Type}} ended with state {{.Status.State}}. <!subteam^S02N6DWBX0F> <{{.Status.URL}}|View logs>'
-      extra_refs:
-      - org: ppc64le-cloud
-        repo: docker-ce-build
-        base_ref: main
-        workdir: true
       spec:
         containers:
         - image: quay.io/powercloud/docker-ce-build
@@ -27,11 +22,28 @@ postsubmit:
           args:
           - -c
           - |
-            set -o errexit
-            set -o nounset
-            set -o pipefail
+            cd ..
+            rm -rf docker-ce-build
+            git config --global user.email "florence.pascual@ibm.com"
+            git config --global user.name "florencepascual"
+            git clone https://florencepascual:${GIT_SECRET_AUTH}@github.com/florencepascual/docker-ce-build.git
+            cd docker-ce-build
             chmod a+x *.sh
-            ./prowjob-periodic-dind-build.sh
+            ./prow-build-docker.sh
+            exit_code_script=`echo $?`
+            echo "Exit code of the script prow-build-docker : $exit_code_script"
+            pid=`/usr/bin/pgrep dockerd`
+            echo "Pid of dockerd : $pid"
+            if [[ $exit_code_script -eq 0 ]]
+            then
+              echo "Success"
+              kill $pid
+              exit 0
+            else
+              echo "Fail"
+              kill $pid
+              exit 1
+            fi
           securityContext:
             privileged: true
           volumeMounts:
@@ -43,6 +55,81 @@ postsubmit:
                 secretKeyRef:
                   name: docker-s3-credentials
                   key: password
+            - name: GIT_SECRET_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: git-credentials-florencepascual
+                  key: password
+          resources:
+            requests:
+              cpu: 4000m
+              memory: 8Gi
+            limits:
+              cpu: 4000m
+              memory: 8Gi
+        volumes:
+        - name: docker-root
+          emptyDir: {}
+    - name: postsubmit-build-containerd
+      cluster: k8s-ppc64le-cluster
+      decorate: true
+      decoration_config:
+        timeout: 2h30m
+      run_if_changed: 'env/date.list'
+      branches:
+        - main
+      reporter_config:
+        slack:
+          channel: 'prow-job-notifications'
+          job_states_to_report:
+           - success
+           - failure
+           - error
+          report_template: 'Job {{.Spec.Job}} of type {{.Spec.Type}} ended with state {{.Status.State}}. <!subteam^S02N6DWBX0F> <{{.Status.URL}}|View logs>'
+      spec:
+        containers:
+        - image: quay.io/powercloud/docker-ce-build
+          command:
+          - /bin/bash
+          args:
+          - -c
+          - |
+            cd ..
+            rm -rf docker-ce-build
+            git clone https://github.com/florencepascual/docker-ce-build
+            cd docker-ce-build
+            chmod a+x *.sh
+            ./prow-build-containerd.sh
+            exitCode_script=`echo $?`
+            echo "Exit code of the script prow-build-containerd : $exitCode_script"
+            pid=`/usr/bin/pgrep dockerd`
+            echo "Pid of dockerd : $pid"
+            if [[ $exitCode_script -eq 0 ]]
+            then
+              echo "Success"
+              kill $pid
+              exit 0
+            else
+              echo "Fail"
+              kill $pid
+              exit 1
+            fi
+          securityContext:
+            privileged: true
+          volumeMounts:
+          - name: docker-root
+            mountPath: /var/lib/docker
+          env:
+            - name: S3_SECRET_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: docker-s3-credentials
+                  key: password
+            - name: DOCKER_SECRET_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: docker-token
+                  key: .dockerconfigjson
           resources:
             requests:
               cpu: 4000m
